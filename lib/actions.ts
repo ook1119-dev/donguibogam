@@ -1,6 +1,6 @@
 "use server";
 
-import { timingSafeEqual } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 import bcrypt from "bcryptjs";
 import {
   getDoctorHospitalId,
@@ -132,7 +132,7 @@ export async function verifyReservationPassword(
 
   const { data, error } = await getSupabase()
     .from("reservations")
-    .select("password_hash, locked_until")
+    .select("password_hash, failed_attempts, locked_until")
     .eq("id", id)
     .maybeSingle();
   if (error) {
@@ -141,20 +141,45 @@ export async function verifyReservationPassword(
   }
   if (!data) return { ok: false, error: "예약을 찾을 수 없어요." };
 
-  // 숫자 4자리는 1만 가지뿐이라, 5번 틀리면 10분 동안 아예 비교하지 않아요.
-  const lockedMessage = (until: string) =>
-    `비밀번호를 5번 틀려서 잠겼어요. ${Math.ceil((new Date(until).getTime() - Date.now()) / 60000)}분 뒤에 다시 시도해 주세요.`;
-  const isLocked = (until: string | null) => !!until && new Date(until).getTime() > Date.now();
-  if (isLocked(data.locked_until)) return { ok: false, error: lockedMessage(data.locked_until) };
+  // 숫자 4자리는 1만 가지뿐이라, 5번 시도하면 10분 동안 아예 비교하지 않아요.
+  if (data.locked_until && new Date(data.locked_until).getTime() > Date.now()) {
+    const minutes = Math.ceil((new Date(data.locked_until).getTime() - Date.now()) / 60000);
+    return { ok: false, error: `비밀번호를 5번 틀려서 잠겼어요. ${minutes}분 뒤에 다시 시도해 주세요.` };
+  }
+
+  // 비교하기 '전에' 시도 기회를 1번 먼저 써요.
+  // "방금 읽은 횟수·잠금 값이 그대로일 때만" 바꾸기 때문에, 동시에 여러 번 보내도 한 번만 통과해요.
+  const attempt = data.failed_attempts + 1;
+  const lockNow = attempt >= 5;
+  let reserve = getSupabase()
+    .from("reservations")
+    .update({
+      failed_attempts: lockNow ? 0 : attempt,
+      locked_until: lockNow ? new Date(Date.now() + 10 * 60 * 1000).toISOString() : null,
+    })
+    .eq("id", id)
+    .eq("failed_attempts", data.failed_attempts);
+  reserve = data.locked_until ? reserve.eq("locked_until", data.locked_until) : reserve.is("locked_until", null);
+  const { data: reserved, error: reserveError } = await reserve.select("id");
+  if (reserveError) {
+    console.error("verifyReservationPassword:", reserveError);
+    return { ok: false, error: "잠시 후 다시 시도해 주세요." };
+  }
+  if (!reserved?.length) {
+    return { ok: false, error: "동시에 여러 번 시도했어요. 잠시 후 다시 입력해 주세요." };
+  }
 
   const matches = await bcrypt.compare(password, data.password_hash);
   if (!matches) {
-    // 틀린 횟수 +1 (5번째면 DB가 10분 잠금을 걸어요)
-    const { data: lockedUntil } = await getSupabase().rpc("register_failed_attempt", { rid: id });
-    if (isLocked(lockedUntil)) return { ok: false, error: lockedMessage(lockedUntil) };
-    return { ok: false, error: "비밀번호가 맞지 않아요. 5번 틀리면 10분 동안 잠겨요." };
+    return {
+      ok: false,
+      error: lockNow
+        ? "비밀번호를 5번 틀려서 10분 동안 잠겼어요."
+        : `비밀번호가 맞지 않아요. (${5 - attempt}번 남음)`,
+    };
   }
 
+  // 맞히면 횟수·잠금을 처음으로 되돌려요.
   await getSupabase()
     .from("reservations")
     .update({ failed_attempts: 0, locked_until: null })
@@ -242,10 +267,10 @@ export async function doctorLogin(hospitalId: number, code: string): Promise<Sim
   const hospital = await getHospital(Number(hospitalId));
   if (!hospital) return { ok: false, error: "병원을 골라 주세요." };
 
-  const given = Buffer.from(String(code ?? ""));
-  const answer = Buffer.from(expected);
-  if (given.length !== answer.length || !timingSafeEqual(given, answer)) {
-    // 틀리면 일부러 조금 늦게 답해서, 아무 숫자나 계속 넣어보는 걸 어렵게 해요.
+  // 코드는 영문·숫자로 된 긴 무작위 값이라 하나씩 넣어서는 맞히기 어려워요.
+  // 길이가 달라도 비교 시간이 같도록 해시(SHA-256)끼리 비교해요.
+  const digest = (s: string) => createHash("sha256").update(s).digest();
+  if (!timingSafeEqual(digest(String(code ?? "").trim()), digest(expected))) {
     await new Promise((resolve) => setTimeout(resolve, 800));
     return { ok: false, error: "의사 모드 코드가 맞지 않아요." };
   }

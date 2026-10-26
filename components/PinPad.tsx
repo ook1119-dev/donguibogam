@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { BackspaceIcon } from "@phosphor-icons/react";
 import BottomSheet from "@/components/BottomSheet";
 
@@ -21,10 +21,13 @@ export default function PinPad({
   const [error, setError] = useState<string | null>(null);
   const [checking, setChecking] = useState(false);
   const [shakeCount, setShakeCount] = useState(0);
+  // 아주 빠르게 연달아 눌러도 숫자가 빠지지 않게, 누른 값을 바로 ref에도 적어 둬요.
+  const pinRef = useRef("");
 
   async function press(digit: string) {
-    if (checking || pin.length >= 4) return;
-    const next = pin + digit;
+    if (pinRef.current.length >= 4) return;
+    const next = pinRef.current + digit;
+    pinRef.current = next;
     setPin(next);
     setError(null);
     if (next.length < 4) return;
@@ -33,6 +36,7 @@ export default function PinPad({
     const problem = await onComplete(next);
     setChecking(false);
     if (problem) {
+      pinRef.current = "";
       setError(problem);
       setPin("");
       setShakeCount((n) => n + 1);
@@ -40,7 +44,9 @@ export default function PinPad({
   }
 
   function erase() {
-    if (!checking) setPin((p) => p.slice(0, -1));
+    if (checking) return;
+    pinRef.current = pinRef.current.slice(0, -1);
+    setPin(pinRef.current);
   }
 
   // PC에서는 키보드 숫자키로도 입력할 수 있어요.

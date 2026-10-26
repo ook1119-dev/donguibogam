@@ -67,10 +67,10 @@ export default function DoctorLogin({ hospitals }: { hospitals: HospitalOption[]
           value={code}
           onChange={(e) => setCode(e.target.value.trim())}
           type="password"
-          inputMode="numeric"
           autoComplete="off"
-          placeholder="코드 입력"
-          className="h-13 w-full scroll-mb-40 rounded-2xl border border-line px-4 text-[16px] tracking-[0.2em] outline-none placeholder:tracking-normal placeholder:text-gray-400 focus:border-brand"
+          autoCapitalize="off"
+          placeholder="코드 입력 (영문·숫자)"
+          className="h-13 w-full scroll-mb-40 rounded-2xl border border-line px-4 text-[16px] tracking-[0.1em] outline-none placeholder:tracking-normal placeholder:text-gray-400 focus:border-brand"
         />
       </label>
 

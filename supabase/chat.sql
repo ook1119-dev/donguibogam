@@ -25,19 +25,6 @@ alter table public.reservations
   add column if not exists failed_attempts int not null default 0,
   add column if not exists locked_until timestamptz;
 
--- 틀린 횟수 +1 (5번째면 10분 잠그고 횟수는 0으로). 동시에 여러 번 시도해도 정확히 세도록 DB 안에서 한 번에 처리해요.
--- 돌려주는 값: 잠긴 경우 잠금이 풀리는 시각, 아니면 null
-create or replace function public.register_failed_attempt(rid uuid)
-returns timestamptz
-language sql
-as $$
-  update public.reservations
-  set failed_attempts = case when failed_attempts + 1 >= 5 then 0 else failed_attempts + 1 end,
-      locked_until    = case when failed_attempts + 1 >= 5 then now() + interval '10 minutes' else locked_until end
-  where id = rid
-  returning locked_until;
-$$;
-
--- 이 함수도 서버(secret 키)만 부를 수 있어요.
-revoke execute on function public.register_failed_attempt(uuid) from public, anon, authenticated;
-grant execute on function public.register_failed_attempt(uuid) to service_role;
+-- 횟수 세기는 앱 서버에서 "비교 전에 기회 1번 먼저 쓰기" 방식으로 해요 (lib/actions.ts).
+-- 처음에 만들었던 DB 함수는 동시 시도를 막지 못해서 쓰지 않아요.
+drop function if exists public.register_failed_attempt(uuid);
